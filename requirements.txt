@@ -1,0 +1,6 @@
+langgraph>=0.2
+langchain-core
+langchain-openai
+langchain-tavily
+python-dotenv
+pydantic>=2

@@ -1,0 +1,17 @@
+# secrets
+.env
+
+# python / uv
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+
+# langgraph dev server data
+.langgraph_api/
+
+# editor / os
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
