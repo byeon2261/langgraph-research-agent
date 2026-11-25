@@ -28,6 +28,13 @@ uv run main.py "LangGraph 최신 기능은?"
 `dev.ps1`은 UTF-8 모드를 켠 뒤 `uv run langgraph dev`를 실행해요. (아래 트러블슈팅 3번 참고)
 
 
+## 웹 화면 (React)
+```powershell
+.\dev.ps1                 # 터미널 1: 백엔드
+cd frontend; npm install; npm run dev   # 터미널 2: 프런트엔드
+```
+http://localhost:5173 접속. 자세한 내용은 `frontend/README.md` 참고.
+
 ## 다음 단계
 1. `Send`로 검색어 여러 개 병렬 검색
 2. `MemorySaver` 체크포인터로 대화 이어 가기
