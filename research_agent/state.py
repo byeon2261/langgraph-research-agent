@@ -8,6 +8,8 @@ class State(TypedDict, total=False):
     review: bool
     # 후속 질문 맥락: 같은 thread에서 이전에 했던 질문들 (체크포인터로 유지)
     past_questions: Annotated[list[str], operator.add]
+    # 몇 번째 질문(turn)인지. 후속 질문 때 이전 질문의 검색 결과를 구분하는 데 쓴다
+    current_turn: int
     # 질문을 쪼갠 하위 질문
     sub_questions: list[str]
     # 이번 라운드에 병렬로 검색할 작업 [{query, sub_question}] (매 라운드 덮어씀)
@@ -22,12 +24,15 @@ class State(TypedDict, total=False):
     is_sufficient: bool
     missing_info: str
     loop_count: int
+    max_loops: int
     # 보고서와, 보고서의 [번호]와 똑같은 순서의 출처 목록
     report: str
     sources: list[dict]
 
 
-class SearchState(TypedDict):
+class SearchState(TypedDict, total=False):
     """Send로 search 노드에 하나씩 넘기는 개별 작업 입력"""
     query: str
     sub_question: str
+    round: int  # 몇 번째 검색 라운드인지 (1 = 첫 검색, 2~ = 재검색)
+    turn: int

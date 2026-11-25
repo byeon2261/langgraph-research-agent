@@ -15,6 +15,12 @@ LangGraph dev 서버에 연결해 리서치 진행 과정과 보고서, 출처�
    ```
 3. 브라우저에서 http://localhost:5173 접속
 
+## 테스트
+```powershell
+npm test   # Vitest: src/lib/turns.test.js
+```
+화면 상태 로직(`src/lib/turns.js`)은 React와 분리되어 있어 브라우저 없이 테스트돼요.
+
 ## 기능
 - 검색 전 계획 확인: "검색 전 계획 확인"을 켜면 하위 질문을 고치거나 추가·삭제한 뒤 검색을 시작해요 (LangGraph `interrupt`)
 - 후속 질문: 리서치 화면 아래 입력창은 같은 대화(thread)에서 이어서 조사해요
@@ -25,5 +31,6 @@ LangGraph dev 서버에 연결해 리서치 진행 과정과 보고서, 출처�
 ## 구조
 - `src/api.js` : LangGraph SDK로 스레드 생성, `updates` + `messages-tuple` 스트리밍, interrupt 재개(`command.resume`)
 - `src/App.jsx` : 화면 상태 관리 (세션, 진행 단계, 출처, 보고서)
+- `src/lib/turns.js` : 상태 갱신·출처 링크 변환 순수 함수 (+ `turns.test.js`)
 - `src/components/` : Sidebar, Composer(입력창), ProgressPanel(진행 과정), PlanReview(계획 확인), SourcesPanel(출처)
 - `vite.config.js` : `/api` → `http://127.0.0.1:2024` 프록시 (CORS 회피)

@@ -1,0 +1,52 @@
+[
+  {
+    "id": "ai-regulation",
+    "question": "국내외 AI 규제 법안 현황과 시행 시기, 기업에 미치는 영향",
+    "aspects": ["한국의 AI 관련 법(예: AI 기본법) 현황", "EU AI Act 등 해외 주요 규제", "각 규제의 시행 시기나 일정", "기업이 준비해야 할 의무나 영향"]
+  },
+  {
+    "id": "agent-frameworks",
+    "question": "LangGraph와 CrewAI의 기능 차이와 실제 도입 사례",
+    "aspects": ["LangGraph의 핵심 개념과 기능", "CrewAI의 핵심 개념과 기능", "두 프레임워크의 차이점 비교", "실제 기업 도입 사례"]
+  },
+  {
+    "id": "battery-recycling",
+    "question": "전기차 배터리 재활용 시장 전망과 주요 기업",
+    "aspects": ["시장 규모나 성장률 전망 수치", "주요 국내 기업", "주요 해외 기업", "재활용 기술 방식 또는 정책 동향"]
+  },
+  {
+    "id": "korea-ai-startup-investment",
+    "question": "국내 생성형 AI 스타트업 투자 규모와 주요 투자사",
+    "aspects": ["최근 투자 규모 수치", "주요 투자 유치 스타트업", "주요 투자사(VC, 대기업 등)", "투자 동향 변화나 해외 비교"]
+  },
+  {
+    "id": "semiconductor-export",
+    "question": "한국 반도체 수출 실적과 주요 수출국 변화",
+    "aspects": ["최근 반도체 수출액 수치", "주요 수출 대상국", "수출국 비중의 변화", "변화의 원인(수요, 규제 등)"]
+  },
+  {
+    "id": "ai-engineer-jobs",
+    "question": "국내 AI 엔지니어 채용 수요와 요구 기술 스택",
+    "aspects": ["채용 수요 규모나 추세", "자주 요구되는 기술 스택", "직무 유형(LLM, MLOps 등) 구분", "채용하는 기업 유형"]
+  },
+  {
+    "id": "open-llm-license",
+    "question": "주요 오픈소스 LLM의 성능 비교와 상업적 이용 라이선스",
+    "aspects": ["주요 오픈소스 LLM 목록", "벤치마크 등 성능 비교 근거", "모델별 라이선스 종류", "상업적 이용 시 제한 조건"]
+  },
+  {
+    "id": "youth-support",
+    "question": "청년 대상 정부 지원사업 종류와 신청 조건",
+    "aspects": ["주거 관련 지원", "취업·창업 관련 지원", "자산 형성 관련 지원", "나이·소득 등 신청 조건"]
+  },
+  {
+    "id": "what-is-langgraph",
+    "question": "LangGraph란 무엇인가?",
+    "aspects": ["LangGraph의 정의와 목적", "그래프(노드, 엣지, 상태) 개념", "LangChain과의 관계"]
+  },
+  {
+    "id": "quick-commerce",
+    "question": "국내 퀵커머스 시장 점유율과 업체별 전략 비교",
+    "aspects": ["시장 규모나 점유율 근거", "주요 업체 목록", "업체별 전략 차이", "시장 전망이나 과제"]
+  }
+]

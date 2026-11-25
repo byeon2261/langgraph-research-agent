@@ -18,6 +18,7 @@ dev = [
     "langgraph-cli[inmem]",
     "colorama",
     "pytest",
+    "langsmith>=0.3",
 ]
 
 [build-system]
@@ -27,6 +28,10 @@ build-backend = "setuptools.build_meta"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+# langsmith 내부의 Python 3.14 사용 중단 경고만 숨김 (라이브러리 쪽 문제, 동작 영향 없음)
+filterwarnings = [
+    "ignore:'asyncio.iscoroutinefunction' is deprecated:DeprecationWarning:langsmith.*",
+]
 
 [tool.setuptools]
 packages = ["research_agent"]

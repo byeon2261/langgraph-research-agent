@@ -1,9 +1,8 @@
-import os
-
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import RetryPolicy, Send
 
 from research_agent.nodes import (
+    DEFAULTS,
     evaluate,
     generate_query,
     plan,
@@ -12,8 +11,6 @@ from research_agent.nodes import (
     write_report,
 )
 from research_agent.state import State
-
-MAX_LOOPS = int(os.getenv("MAX_LOOPS", "3"))
 
 # [4] 구조화 출력 파싱 실패 같은 일시적 오류는 노드 단위로 한 번 더 시도
 _retry = RetryPolicy(max_attempts=2)
@@ -25,7 +22,8 @@ def fan_out(state: State) -> list[Send]:
 
 
 def route_after_evaluate(state: State) -> str:
-    if state["is_sufficient"] or state["loop_count"] >= MAX_LOOPS:
+    max_loops = state.get("max_loops") or DEFAULTS.max_loops
+    if state["is_sufficient"] or state["loop_count"] >= max_loops:
         return "write_report"
     return "generate_query"
 

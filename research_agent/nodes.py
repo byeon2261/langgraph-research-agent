@@ -1,10 +1,13 @@
 import logging
 import os
 import time
+from dataclasses import dataclass, field, fields
 from datetime import datetime
+from functools import lru_cache
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
+from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
 from langchain_tavily import TavilySearch
 from langgraph.types import interrupt
@@ -26,26 +29,64 @@ def _env_int(name: str, default: int) -> int:
     return int(os.getenv(name, str(default)))
 
 
-# [4] OpenAI 호출: 실패 시 자동 재시도 + 타임아웃
+@dataclass(frozen=True)
+class Settings:
+    """실행 설정. 기본값은 .env, 실행할 때 config["configurable"]로 덮어쓸 수 있다.
+    예) graph.invoke(inputs, {"configurable": {"max_loops": 1, "eval_model": "gpt-4o-mini"}})
+    """
+
+    model: str = field(default_factory=lambda: os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
+    eval_model: str = field(default_factory=lambda: os.getenv("EVAL_MODEL", "gpt-4o"))
+    report_model: str = field(
+        default_factory=lambda: os.getenv("REPORT_MODEL", os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
+    )
+    max_loops: int = field(default_factory=lambda: _env_int("MAX_LOOPS", 3))
+    min_domains: int = field(default_factory=lambda: _env_int("MIN_DOMAINS", 3))
+    min_results_per_subq: int = field(default_factory=lambda: _env_int("MIN_RESULTS_PER_SUBQ", 2))
+    # 토큰 관리: 결과 본문 길이 + 하위 질문당 프롬프트에 넣을 결과 수 제한
+    max_content_chars: int = field(default_factory=lambda: _env_int("MAX_CONTENT_CHARS", 800))
+    max_results_per_subq_in_prompt: int = field(
+        default_factory=lambda: _env_int("MAX_RESULTS_PER_SUBQ_IN_PROMPT", 6)
+    )
+    search_retries: int = field(default_factory=lambda: _env_int("SEARCH_RETRIES", 2))
+    # False면 질문을 쪼개지 않고 원래 질문 하나로 검색 (평가에서 질문 분해 효과 측정용)
+    use_plan: bool = True
+
+
+def get_settings(config: RunnableConfig | None = None) -> Settings:
+    overrides = (config or {}).get("configurable", {})
+    names = {f.name for f in fields(Settings)}
+    return Settings(**{k: v for k, v in overrides.items() if k in names})
+
+
+DEFAULTS = Settings()
+
+# OpenAI 호출: 실패 시 자동 재시도 + 타임아웃
 _llm_opts = dict(temperature=0, max_retries=3, timeout=60)
-llm = ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"), **_llm_opts)
-eval_llm = ChatOpenAI(model=os.getenv("EVAL_MODEL", "gpt-4o"), **_llm_opts)
-report_llm = ChatOpenAI(
-    model=os.getenv("REPORT_MODEL", os.getenv("OPENAI_MODEL", "gpt-4o-mini")), **_llm_opts
-)
+
+
+@lru_cache(maxsize=None)
+def _chat(model: str) -> ChatOpenAI:
+    return ChatOpenAI(model=model, **_llm_opts)
+
+
+# 기본 모델 (테스트에서 가짜 모델로 바꿔 끼운다)
+llm = _chat(DEFAULTS.model)
+eval_llm = _chat(DEFAULTS.eval_model)
+report_llm = _chat(DEFAULTS.report_model)
 search_tool = TavilySearch(max_results=_env_int("SEARCH_MAX_RESULTS", 3))
 
-MIN_DOMAINS = _env_int("MIN_DOMAINS", 3)
-MIN_RESULTS_PER_SUBQ = _env_int("MIN_RESULTS_PER_SUBQ", 2)
-# [3] 토큰 관리: 결과 본문 길이 + 하위 질문당 프롬프트에 넣을 결과 수 제한
-MAX_CONTENT_CHARS = _env_int("MAX_CONTENT_CHARS", 800)
-MAX_RESULTS_PER_SUBQ_IN_PROMPT = _env_int("MAX_RESULTS_PER_SUBQ_IN_PROMPT", 4)
-SEARCH_RETRIES = _env_int("SEARCH_RETRIES", 2)
+
+def _model(role: str, s: Settings):
+    """설정한 모델이 기본값이면 모듈 전역 모델을, 다르면 해당 모델을 쓴다"""
+    default_obj = {"model": llm, "eval_model": eval_llm, "report_model": report_llm}[role]
+    name = getattr(s, role)
+    return default_obj if name == getattr(DEFAULTS, role) else _chat(name)
 
 
 # ---------- 공통 유틸 ----------
 def _today() -> str:
-    # [2] 로컬 시간 기준 오늘 날짜 (tz 데이터베이스 없이 동작)
+    # 로컬 시간 기준 오늘 날짜 (tz 데이터베이스 없이 동작)
     now = datetime.now().astimezone()
     return now.strftime("%Y년 %m월 %d일")
 
@@ -58,25 +99,32 @@ def _numbered(items: list[str]) -> str:
     return "\n".join(f"{i}. {q}" for i, q in enumerate(items, 1))
 
 
-def _select(state: State) -> list[dict]:
-    """[1][3] 프롬프트에 넣을 결과를 고른다.
-    - 현재 하위 질문의 결과만 (후속 질문 때 이전 라운드 결과 제외)
-    - URL 중복 제거, 하위 질문당 최대 N건
-    - 하위 질문 순서 → 수집 순서로 정렬해 항상 같은 번호가 나오게 함
-    이 목록의 순서가 곧 보고서의 [번호]이자 sources의 번호다.
+def _select(state: State, s: Settings = DEFAULTS) -> list[dict]:
+    """프롬프트에 넣을 결과를 고른다. 이 목록의 순서가 곧 보고서의 [번호]이자 sources의 번호다.
+    - 현재 질문(turn)의 현재 하위 질문 결과만 사용
+    - URL 중복 제거
+    - 하위 질문당 최대 N건. 넘치면 **최근 라운드(재검색) 결과를 우선** 남긴다
+      (재검색은 '근거가 부족하다'고 판정된 뒤에 한 것이므로 새 결과가 더 필요한 자료다)
+    - 출력 순서는 하위 질문 순서 → 라운드 → 수집 순서로 고정
     """
     subs = state.get("sub_questions", [])
-    seen, picked = set(), {q: [] for q in subs}
-    for r in state.get("results", []):
-        q = r.get("sub_question")
-        url = r.get("url")
-        if q not in picked or not url or url in seen:
+    turn = state.get("current_turn")
+    seen, by_sub = set(), {q: [] for q in subs}
+    for i, r in enumerate(state.get("results", [])):
+        q, url = r.get("sub_question"), r.get("url")
+        if q not in by_sub or not url or url in seen:
             continue
-        if len(picked[q]) >= MAX_RESULTS_PER_SUBQ_IN_PROMPT:
+        if turn is not None and r.get("turn", turn) != turn:
             continue
         seen.add(url)
-        picked[q].append(r)
-    return [r for q in subs for r in picked[q]]
+        by_sub[q].append((r.get("round", 1), i, r))
+
+    out = []
+    for q in subs:
+        items = by_sub[q]
+        keep = sorted(items, key=lambda x: (-x[0], x[1]))[: s.max_results_per_subq_in_prompt]
+        out.extend(r for _, _, r in sorted(keep, key=lambda x: (x[0], x[1])))
+    return out
 
 
 def _format_results(results: list[dict]) -> str:
@@ -99,23 +147,30 @@ class Plan(BaseModel):
     items: list[PlanItem] = Field(description="하위 질문 3~4개")
 
 
-def plan(state: State) -> dict:
+def plan(state: State, config: RunnableConfig) -> dict:
+    s = get_settings(config)
     past = state.get("past_questions", [])
-    prev_report = (state.get("report") or "")[:1000] or "(없음)"
-    result = llm.with_structured_output(Plan).invoke(
-        PLAN_PROMPT.format(
-            today=_today(),
-            question=state["question"],
-            past_questions=" / ".join(past) or "(없음)",
-            previous_report=prev_report,
+    turn = len(past) + 1
+    if s.use_plan:
+        prev_report = (state.get("report") or "")[:1000] or "(없음)"
+        result = _model("model", s).with_structured_output(Plan).invoke(
+            PLAN_PROMPT.format(
+                today=_today(),
+                question=state["question"],
+                past_questions=" / ".join(past) or "(없음)",
+                previous_report=prev_report,
+            )
         )
-    )
-    items = result.items[:4]
+        items = [(it.sub_question, it.query) for it in result.items[:4]]
+    else:
+        items = [(state["question"], state["question"])]  # 질문 그대로 한 번 검색
     return {
         "past_questions": [state["question"]],
-        "sub_questions": [it.sub_question for it in items],
-        "pending_queries": [{"query": it.query, "sub_question": it.sub_question} for it in items],
+        "current_turn": turn,
+        "sub_questions": [sq for sq, _ in items],
+        "pending_queries": [{"query": q, "sub_question": sq, "round": 1, "turn": turn} for sq, q in items],
         "loop_count": 1,
+        "max_loops": s.max_loops,
         # 새 질문이 시작되면 이전 평가/보고서 상태는 초기화
         "covered": [],
         "rule_notes": [],
@@ -124,7 +179,7 @@ def plan(state: State) -> dict:
     }
 
 
-# ---------- [6] review_plan: 검색 전에 사용자 승인/수정 (interrupt) ----------
+# ---------- review_plan: 검색 전에 사용자 승인/수정 (interrupt) ----------
 def review_plan(state: State) -> dict:
     tasks = state.get("pending_queries", [])
     if state.get("review"):
@@ -142,7 +197,8 @@ def review_plan(state: State) -> dict:
             by_sub = {t["sub_question"]: t["query"] for t in tasks}
             edited = [s.strip() for s in edited if s and s.strip()][:6]
             # 바뀌지 않은 하위 질문은 원래 검색어를, 새로 쓴 하위 질문은 그 문장을 검색어로 사용
-            tasks = [{"sub_question": s, "query": by_sub.get(s, s)} for s in edited]
+            turn = state.get("current_turn")
+            tasks = [{"sub_question": s, "query": by_sub.get(s, s), "round": 1, "turn": turn} for s in edited]
     return {
         "sub_questions": [t["sub_question"] for t in tasks],
         "pending_queries": tasks,
@@ -160,11 +216,12 @@ class FollowUp(BaseModel):
     items: list[FollowUpItem] = Field(description="새 검색어 (최대 3개)")
 
 
-def generate_query(state: State) -> dict:
+def generate_query(state: State, config: RunnableConfig) -> dict:
+    s = get_settings(config)
     subs = state.get("sub_questions", [])
     covered = state.get("covered", [])
     uncovered = [q for q, ok in zip(subs, covered) if not ok] or subs
-    result = llm.with_structured_output(FollowUp).invoke(
+    result = _model("model", s).with_structured_output(FollowUp).invoke(
         FOLLOWUP_PROMPT.format(
             today=_today(),
             question=state["question"],
@@ -177,7 +234,12 @@ def generate_query(state: State) -> dict:
     for it in result.items[:3]:
         # 번호로 원래 하위 질문 문장에 정확히 연결 (LLM이 문장을 바꿔 써도 안전)
         idx = min(max(it.sub_question_no, 1), len(uncovered)) - 1
-        tasks.append({"query": it.query, "sub_question": uncovered[idx]})
+        tasks.append({
+            "query": it.query,
+            "sub_question": uncovered[idx],
+            "round": state.get("loop_count", 0) + 1,
+            "turn": state.get("current_turn"),
+        })
     return {
         "pending_queries": tasks,
         "queries": [t["query"] for t in tasks],
@@ -186,16 +248,17 @@ def generate_query(state: State) -> dict:
 
 
 # ---------- search: Send로 검색어마다 병렬 실행 ----------
-def search(state: SearchState) -> dict:
+def search(state: SearchState, config: RunnableConfig) -> dict:
+    s = get_settings(config)
     query = state["query"]
     last_error = None
-    for attempt in range(SEARCH_RETRIES + 1):  # [4] 재시도
+    for attempt in range(s.search_retries + 1):  # 재시도
         try:
             response = search_tool.invoke({"query": query})
             break
         except Exception as e:  # noqa: BLE001
             last_error = e
-            log.warning("search failed (%s/%s): %s", attempt + 1, SEARCH_RETRIES + 1, e)
+            log.warning("search failed (%s/%s): %s", attempt + 1, s.search_retries + 1, e)
             time.sleep(1.5 * (attempt + 1))
     else:
         # 끝내 실패하면 그래프를 멈추지 않고 빈 결과로 넘어간다 (평가에서 재검색 대상이 됨)
@@ -206,9 +269,11 @@ def search(state: SearchState) -> dict:
         {
             "title": r.get("title"),
             "url": r.get("url"),
-            "content": (r.get("content") or "")[:MAX_CONTENT_CHARS],  # [3]
+            "content": (r.get("content") or "")[: s.max_content_chars],
             "query": query,
             "sub_question": state["sub_question"],
+            "round": state.get("round", 1),
+            "turn": state.get("turn"),
         }
         for r in items
     ]
@@ -221,11 +286,12 @@ class Evaluation(BaseModel):
     missing_info: str = Field(description="근거가 없는 하위 질문과 더 찾을 내용. 충분하면 빈 문자열")
 
 
-def evaluate(state: State) -> dict:
+def evaluate(state: State, config: RunnableConfig) -> dict:
+    s = get_settings(config)
     subs = state.get("sub_questions", [])
-    selected = _select(state)
+    selected = _select(state, s)
 
-    result = eval_llm.with_structured_output(Evaluation).invoke(
+    result = _model("eval_model", s).with_structured_output(Evaluation).invoke(
         EVALUATE_PROMPT.format(
             today=_today(),
             question=state["question"],
@@ -237,13 +303,13 @@ def evaluate(state: State) -> dict:
 
     notes: list[str] = []
     domains = {_domain(r["url"]) for r in selected}
-    if len(domains) < MIN_DOMAINS:
-        notes.append(f"출처 도메인 {len(domains)}개 (최소 {MIN_DOMAINS}개 필요)")
+    if len(domains) < s.min_domains:
+        notes.append(f"출처 도메인 {len(domains)}개 (최소 {s.min_domains}개 필요)")
     for i, q in enumerate(subs):
         n = sum(1 for r in selected if r.get("sub_question") == q)
-        if n < MIN_RESULTS_PER_SUBQ:
+        if n < s.min_results_per_subq:
             covered[i] = False
-            notes.append(f"'{q}' 검색 결과 {n}건 (최소 {MIN_RESULTS_PER_SUBQ}건 필요)")
+            notes.append(f"'{q}' 검색 결과 {n}건 (최소 {s.min_results_per_subq}건 필요)")
 
     is_sufficient = bool(subs) and all(covered) and not notes
     missing = result.missing_info
@@ -258,10 +324,11 @@ def evaluate(state: State) -> dict:
     }
 
 
-# ---------- write_report: [1] 보고서와 같은 번호의 sources를 함께 반환 ----------
-def write_report(state: State) -> dict:
-    selected = _select(state)
-    report = report_llm.invoke(
+# ---------- write_report: 보고서와 같은 번호의 sources를 함께 반환 ----------
+def write_report(state: State, config: RunnableConfig) -> dict:
+    s = get_settings(config)
+    selected = _select(state, s)
+    report = _model("report_model", s).invoke(
         REPORT_PROMPT.format(
             today=_today(),
             question=state["question"],
