@@ -9,6 +9,7 @@ __pycache__/
 
 # langgraph dev server data
 .langgraph_api/
+checkpoints.sqlite*
 
 # editor / os
 .vscode/

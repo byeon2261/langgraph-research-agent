@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-export default function Composer({ onSubmit, onStop, running, compact }) {
+export default function Composer({ onSubmit, onStop, running, compact, placeholder }) {
   const [text, setText] = useState("");
 
   const submit = () => {
@@ -14,7 +14,7 @@ export default function Composer({ onSubmit, onStop, running, compact }) {
     <div className={`composer ${compact ? "compact" : ""}`}>
       <textarea
         value={text}
-        placeholder="무엇을 조사할까요? 예) 2026년 국내 생성형 AI 스타트업 투자 동향"
+        placeholder={placeholder || "무엇을 조사할까요? 예) 2026년 국내 생성형 AI 스타트업 투자 동향"}
         rows={compact ? 1 : 3}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
@@ -28,7 +28,7 @@ export default function Composer({ onSubmit, onStop, running, compact }) {
         <button className="send stop" onClick={onStop}>중지</button>
       ) : (
         <button className="send" onClick={submit} disabled={!text.trim()}>
-          리서치 시작
+          {compact ? "보내기" : "리서치 시작"}
         </button>
       )}
     </div>

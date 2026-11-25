@@ -3,24 +3,30 @@ name = "research-agent"
 version = "0.1.0"
 requires-python = ">=3.10"
 dependencies = [
-    "langgraph>=0.2",
+    "langgraph>=1.0",
     "langchain-core",
     "langchain-openai",
     "langchain-tavily",
     "python-dotenv",
     "pydantic>=2",
     "streamlit>=1.65.0",
+    "langgraph-checkpoint-sqlite",
 ]
 
 [dependency-groups]
 dev = [
     "langgraph-cli[inmem]",
     "colorama",
+    "pytest",
 ]
 
 [build-system]
 requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
 
 [tool.setuptools]
 packages = ["research_agent"]
