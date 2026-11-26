@@ -238,6 +238,32 @@ def test_verify_report_can_be_disabled(stubs):
     assert out == {"unverified_claims": [], "revised_sentences": 0}
 
 
+def test_report_numbers_in_table_rows_and_bullets():
+    report = (
+        "## 1. 주요 기업\n| 기업 | 유치 규모 |\n|---|---|\n"
+        "| 그린팜 | 600억 원 [1] |\n| 팜로봇 | 900억 원 [1] |\n"
+        "- 그린팜 누적 투자: 1,200억 원 [1]"
+    )
+    evidence = [{"n": 1, "content": "그린팜 600억 원 유치, 그린팜 누적 투자 1,200억 원. 팜로봇 350억 원"}]
+    total, bad = n.check_report_numbers(report, evidence)
+    assert total == 3 and [b["numbers"] for b in bad] == [["900억 원"]]
+
+
+def test_report_prompt_asks_for_topic_structure(stubs, monkeypatch):
+    seen = []
+
+    class Rec:
+        def invoke(self, prompt):
+            seen.append(prompt)
+            return type("R", (), {"content": "r"})()
+
+    monkeypatch.setattr(n, "report_llm", Rec())
+    n.write_report({"question": "Q", "sub_questions": ["A"], "covered": [True], "results": []}, {})
+    p = seen[0]
+    assert "주제별로 다시 정리" in p and "마크다운 표" in p and "## 핵심 시사점" in p
+    assert "하위 질문 순서대로 답을 나열하지 말고" in p
+
+
 def test_report_prompt_marks_weak_subquestions(stubs, monkeypatch):
     seen = []
     class Rec:

@@ -30,6 +30,7 @@ research_agent/
   state.py    # State + SearchState(Send로 넘기는 개별 검색 입력)
   prompts.py  # plan / 추가 검색어 / 평가 / 보고서 프롬프트 (오늘 날짜 포함)
   nodes.py    # 노드 7개: plan, review_plan, generate_query, search, evaluate, write_report, verify_report
+  llm.py      # 채팅 모델 생성 (추론 모델은 temperature 대신 reasoning_effort)
   numbers.py  # 수치 해석·비교 규칙 (값·단위·반올림·맥락) — verify_report와 평가 지표가 함께 사용
   graph.py    # build_graph(checkpointer) + Studio/서버용 graph
 main.py       # CLI (SQLite 체크포인터, 계획 승인, 후속 질문, 토큰 스트리밍)
@@ -54,6 +55,7 @@ langgraph.json  # LangGraph Studio용 설정
 | `MAX_RESULTS_PER_SUBQ_IN_PROMPT` | 6 | 하위 질문당 평가/보고서 프롬프트에 넣을 최대 결과 수 (넘치면 최근 재검색 결과 우선) |
 | `SEARCH_RETRIES` | 2 | 검색 실패 시 재시도 횟수 |
 | `JUDGE_MODEL` | gpt-4o | 품질 평가의 LLM 심판 모델 |
+| `REASONING_EFFORT` | low | 추론 모델(gpt-6.1-sol, o3, gpt-5 등)의 추론 강도. 이 모델들은 temperature 대신 이 값으로 호출 |
 
 설정은 실행할 때 `config["configurable"]`로 덮어쓸 수도 있어요. 예) `graph.invoke(inputs, {"configurable": {"max_loops": 1}})`
 
@@ -77,7 +79,7 @@ uv run main.py --thread 1a2b3c4d   # 이전 대화 이어 가기 (thread id는 �
 
 ## 테스트
 ```powershell
-uv run pytest                       # 백엔드 108개 (약 1초, API 키 불필요)
+uv run pytest                       # 백엔드 128개 (약 1초, API 키 불필요)
 cd frontend; npm test               # 프런트엔드 11개 (Vitest)
 ```
 | 파일 | 확인하는 것 |
@@ -412,6 +414,47 @@ http://localhost:5173 접속. 자세한 내용은 `frontend/README.md` 참고.
 3. **2단계 — 판정**: 주장마다 **그 주장이 인용한 근거 자료만** 붙여서 supported / partial / unsupported 판정
 4. **재채점 도구** `eval/rejudge.py`: 저장된 결과의 보고서·근거 자료로 심판만 다시 돌린다 (검색·보고서 생성 없음 → Tavily 비용 0)
 5. 테스트 6개 추가 (백엔드 108개)
+
+## 개선 이력 8: 보고서 형식을 "질문별 답변"에서 "주제별 정리"로
+**문제**: 보고서가 하위 질문(검색에 쓴 질문 문장)을 그대로 소제목으로 쓰고 각각에 답하는 형식이라, 조사 과정이 드러나고 자료가 흩어져 읽기 어려웠다.
+
+**변경 (`REPORT_PROMPT`)**
+| 항목 | 이전 | 이후 |
+|---|---|---|
+| 첫머리 | "핵심 요약" 소제목 | 제목 없는 결론 문단 2~3문장 (핵심 수치 포함) |
+| 본문 구성 | 하위 질문마다 소제목 1개 | 자료를 주제별로 다시 묶은 번호 섹션 3~5개 (`## 1. 투자 규모와 추이`처럼 내용을 요약한 제목) |
+| 수치 | 문장 속에 나열 | `- 항목: 값 (기간·비교 기준) [번호]` 목록 |
+| 비교 | 문장 | 비교 대상이 3개 이상이면 마크다운 표 (행마다 [번호]) |
+| 마무리 | 없음 | `## 핵심 시사점` 2~3개 (근거로 뒷받침되는 해석만) |
+| 근거 부족 | 본문 곳곳에 "확인되지 않음" | 해당 섹션 끝에 `- 확인되지 않음: ...` 한 줄 |
+| 금지 | - | "검색 결과에 따르면" 같은 조사 과정 표현 |
+
+하위 질문은 "조사 체크리스트"로만 넘기고, 근거 확보/부족 표시와 사실 규칙(수치는 자료 그대로, 모든 수치에 [번호])은 그대로 유지했다.
+
+**새 형식에 맞춘 검사·평가 수정**
+- 수치 검사: 표 행과 `항목: 값` 목록도 문장처럼 검사 (테스트 추가)
+- `verify_report`: 걸린 문장이 표 행이면 셀 값만 고치고 표 형식 유지
+- 인용 포함 문장 비율: 표 머리글 행과 `- 확인되지 않음` 줄은 인용 대상에서 제외
+- 심판 v2: 표에 있는 주장은 행을 원문 그대로 인용하게 하고, 심판이 행을 문장으로 풀어 써도 보고서에 있는 주장으로 인정 (수치는 일치해야 함)
+- 웹 화면: 넓은 표 가로 스크롤, 머리글 강조, 결론 문단 강조
+
+**주의**: 보고서 형식이 바뀌어 인용 포함 문장 비율 등 일부 지표는 이전 평가와 직접 비교하기 어렵다. 형식을 잘 따르지 않으면 `.env`에 `REPORT_MODEL=gpt-4o`로 보고서 모델만 올려 볼 수 있다.
+
+## 개선 이력 9: 추론 모델(gpt-6.1-sol) 지원
+**문제**: 모든 모델을 `temperature=0`으로 호출하고 있었다. OpenAI GPT-6 가이드는 추론 강도가 `none`이 아니면 `temperature`·`top_p`·`top_logprobs`를 빼라고 하고, GPT-6.1 Sol은 `none`을 지원하지 않는다. 설치된 `langchain-openai` 1.8.5는 gpt-5 계열만 temperature를 자동으로 빼 주고 gpt-6 계열에는 `temperature: 0`을 그대로 보낸다 (요청 본문으로 확인).
+
+**변경**
+- 모델 생성을 `research_agent/llm.py`로 모음 (그래프 노드와 평가 심판이 함께 사용)
+- 모델 이름이 `o1`·`o3`·`o4`…, `gpt-5`(gpt-5-chat 제외), `gpt-6`으로 시작하면 추론 모델로 보고 `temperature`를 빼고 `reasoning_effort`(`REASONING_EFFORT`, 기본 `low`)로 호출, 타임아웃 180초
+- 그 밖의 모델(gpt-4o, gpt-4o-mini 등)은 기존처럼 `temperature=0`
+- 테스트 13개 추가: 모델별 판별, 실제 요청 본문에 temperature가 빠지는지 확인 (백엔드 128개)
+
+**사용**
+```dotenv
+OPENAI_MODEL=gpt-6.1-sol    # 계획·추가 검색어·보고서 작성 (REPORT_MODEL을 따로 안 쓰면 보고서도 이 모델)
+REASONING_EFFORT=low        # 품질이 부족하면 medium
+```
+비용 참고: gpt-6.1-sol은 입력 $2 / 출력 $10 (100만 토큰당)으로 gpt-4o-mini보다 훨씬 비싸다. 보고서 품질만 올리고 싶다면 `OPENAI_MODEL`은 그대로 두고 `REPORT_MODEL=gpt-6.1-sol`만 설정하는 방법도 있다.
 
 ## 다음 단계
 1. 심판 v2로 10문항 × 3설정(`no_plan`, `baseline`, `improved`) 본 평가를 다시 돌려, 질문 분해·재검색의 효과를 새 기준으로 확인 (평가 결과 1~3의 근거 일치율은 이전 심판 기준)

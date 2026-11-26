@@ -10,6 +10,8 @@ from urllib.parse import urlparse
 from dotenv import load_dotenv
 from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
+
+from research_agent.llm import make_chat_model
 from langchain_tavily import TavilySearch
 from langgraph.types import interrupt
 from pydantic import BaseModel, Field
@@ -66,13 +68,11 @@ def get_settings(config: RunnableConfig | None = None) -> Settings:
 
 DEFAULTS = Settings()
 
-# OpenAI 호출: 실패 시 자동 재시도 + 타임아웃
-_llm_opts = dict(temperature=0, max_retries=3, timeout=60)
-
-
+# OpenAI 호출: 실패 시 자동 재시도 + 타임아웃. 추론 모델(gpt-6.1-sol 등)은 temperature 없이
+# reasoning_effort로 호출한다 (research_agent/llm.py)
 @lru_cache(maxsize=None)
 def _chat(model: str) -> ChatOpenAI:
-    return ChatOpenAI(model=model, **_llm_opts)
+    return make_chat_model(model)
 
 
 # 기본 모델 (테스트에서 가짜 모델로 바꿔 끼운다)

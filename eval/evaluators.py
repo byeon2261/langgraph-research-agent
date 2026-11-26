@@ -18,16 +18,21 @@ def _cited(report: str) -> set[int]:
 
 
 def _content_lines(report: str) -> list[str]:
-    """제목, 표 구분선, 짧은 줄을 뺀 '주장이 담긴 줄'"""
-    lines = []
-    for line in (report or "").splitlines():
-        t = line.strip()
+    """제목, 표 머리글·구분선, '확인되지 않음' 표시, 짧은 줄을 뺀 '주장이 담긴 줄'"""
+    lines = [l.strip() for l in (report or "").splitlines()]
+    out = []
+    for i, t in enumerate(lines):
         if not t or t.startswith("#") or set(t) <= set("|-: "):
             continue
+        nxt = lines[i + 1] if i + 1 < len(lines) else ""
+        if t.startswith("|") and nxt and set(nxt) <= set("|-: "):
+            continue  # 표 머리글 행
+        if re.match(r"^[-*]\s*확인되지 않음", t):
+            continue  # 근거가 없다고 밝힌 줄은 인용 대상이 아님
         if len(CITE_RE.sub("", t)) < 25:
             continue
-        lines.append(t)
-    return lines
+        out.append(t)
+    return out
 
 
 # ---------- 규칙 기반 지표 (비용 0) ----------
@@ -133,7 +138,8 @@ ASPECT_PROMPT = """당신은 리서치 보고서를 채점하는 심판입니다
 EXTRACT_PROMPT = """아래 리서치 보고서에서 수치, 날짜, 고유명사, 비교가 들어간 구체적인 주장 문장을 최대 12개 고르세요.
 - 보고서에 실제로 있는 문장만 고르고, quote에는 보고서 문장을 한 글자도 바꾸지 말고 그대로 옮기세요.
 - 출처 번호가 없는 구체적인 주장도 포함하세요.
-- cited에는 그 문장에 붙은 [번호]를 적으세요.
+- 표에 있는 주장은 그 행을 `| ... |` 원문 그대로 quote에 옮기세요. 여러 행을 합치거나 문장으로 바꿔 쓰지 마세요.
+- cited에는 그 문장(행)에 붙은 [번호]를 적으세요.
 
 보고서:
 {report}"""
@@ -149,7 +155,7 @@ VERIFY_PROMPT = """당신은 리서치 보고서의 엄격한 사실 확인 담�
 
 
 def _norm_text(t: str) -> str:
-    return re.sub(r"[\s\[\]\d.,·()\"'“”‘’:;!?~\-]", "", CITE_RE.sub("", t or ""))
+    return re.sub(r"[\s\[\]\d.,·()\"'“”‘’:;!?~\-|*_`]", "", CITE_RE.sub("", t or ""))
 
 
 def _bigrams(t: str) -> set[str]:
@@ -175,6 +181,10 @@ def claim_in_report(quote: str, report: str, min_overlap: float = 0.7) -> bool:
             break
         if qb:
             best = max(best, len(qb & _bigrams(sn)) / len(qb))
+            # 표의 행은 심판이 문장으로 풀어 쓰기 쉬우므로, 행 내용이 주장에 대부분 들어 있으면 인정
+            sb = _bigrams(sn)
+            if sent.startswith("|") and sb:
+                best = max(best, len(qb & sb) / len(sb))
     if best < min_overlap:
         return False
     report_nums = [m for m in extract_mentions(report) if is_checkable(m)]
@@ -185,9 +195,9 @@ def claim_in_report(quote: str, report: str, min_overlap: float = 0.7) -> bool:
 
 
 def _judge_llm():
-    from langchain_openai import ChatOpenAI
+    from research_agent.llm import make_chat_model
 
-    return ChatOpenAI(model=os.getenv("JUDGE_MODEL", "gpt-4o"), temperature=0, max_retries=3, timeout=90)
+    return make_chat_model(os.getenv("JUDGE_MODEL", "gpt-4o"), timeout=90)
 
 
 def make_llm_judges(judge=None):

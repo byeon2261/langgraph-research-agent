@@ -161,6 +161,8 @@ export default function App() {
         ) : (
           <>
             <div className="content">
+              {/* 보고서 열과 입력창을 한 열로 묶어 입력창이 보고서와 같은 너비가 되게 한다 */}
+              <div className="main-col">
               <div className="report-col">
                 {active.turns.map((t, i) => {
                   const isLast = i === active.turns.length - 1;
@@ -195,20 +197,21 @@ export default function App() {
                 })}
                 <div ref={endRef} />
               </div>
+              <div className="bottom">
+                <Composer
+                  onSubmit={ask}
+                  onStop={stop}
+                  running={running}
+                  compact
+                  placeholder="이어서 질문하기 (예: 그중 EU 규제를 더 자세히)"
+                />
+                <div className="bottom-opts">{reviewToggle}</div>
+              </div>
+              </div>
               <SourcesPanel
                 sources={lastTurn?.sources.length ? lastTurn.sources : lastTurn?.collected ?? []}
                 final={!!lastTurn?.sources.length}
               />
-            </div>
-            <div className="bottom">
-              <Composer
-                onSubmit={ask}
-                onStop={stop}
-                running={running}
-                compact
-                placeholder="이어서 질문하기 (예: 그중 EU 규제를 더 자세히)"
-              />
-              <div className="bottom-opts">{reviewToggle}</div>
             </div>
           </>
         )}

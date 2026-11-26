@@ -186,3 +186,36 @@ def test_run_eval_saves_evidence(stubs, tmp_path):
     md = run_eval.main(["--limit", "1", "--no-judge", "--variants", "improved", "--concurrency", "1", "--out", str(tmp_path)])
     row = json.loads(md.with_suffix(".json").read_text(encoding="utf-8"))["rows"][0]
     assert row["evidence"] and {"n", "content"} <= set(row["evidence"][0])
+
+
+TOPIC_REPORT = """국내 스마트팜 투자는 2026년 1~3분기 누적 3,200억 원이다 [1].
+
+## 1. 주요 기업과 유치 규모
+| 기업 | 분야 | 2026년 유치 규모 |
+|---|---|---|
+| 그린팜 | 수직농장 | 600억 원 (시리즈 B) [2] |
+| 팜로봇 | 수확 로봇 | 350억 원 (시리즈 A) [3] |
+- 확인되지 않음: 해외 투자사별 투자 금액과 지분율, 후속 라운드 일정
+
+## 핵심 시사점
+- 투자금이 수직농장과 로봇 분야에 몰리고 있다 [2][3]
+"""
+
+
+def test_citation_coverage_on_topic_report():
+    """표 머리글과 '확인되지 않음' 줄은 인용 대상에서 뺀다"""
+    r = ev.citation_coverage({"report": TOPIC_REPORT})
+    assert r["score"] == 1.0 and r["comment"] == "4/4줄"
+
+
+@pytest.mark.parametrize(
+    "quote,ok",
+    [
+        ("| 팜로봇 | 수확 로봇 | 350억 원 (시리즈 A) [3] |", True),  # 표 행 그대로
+        ("팜로봇은 수확 로봇 분야에서 시리즈 A로 350억 원을 유치했다", True),  # 표 행을 문장으로 풀어 씀
+        ("팜로봇은 수확 로봇 분야에서 시리즈 A로 500억 원을 유치했다", False),  # 수치가 표와 다름
+        ("농업 드론 기업이 시리즈 C로 350억 원을 유치했다", False),  # 수치만 같고 다른 내용
+    ],
+)
+def test_claim_in_report_table_rows(quote, ok):
+    assert ev.claim_in_report(quote, TOPIC_REPORT) is ok
