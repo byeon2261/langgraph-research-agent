@@ -119,7 +119,9 @@ def run_local(examples, variants, evaluators, concurrency: int, repeat: int = 1)
             mark = "x" if err else "ok"
             print(f"  [{mark}] {ex['id']} #{rep}  " + " ".join(f"{k}={v}" for k, v in res["scores"].items() if k in QUALITY_KEYS[:3]))
             return {"variant": name, "rep": rep, "id": ex["id"], "question": ex["question"], **res, "error": err,
-                    "report": out.get("report", ""), "sub_questions": out.get("sub_questions", [])}
+                    "report": out.get("report", ""), "sub_questions": out.get("sub_questions", []),
+                    # 수치 검사 결과를 나중에 직접 확인할 수 있도록 근거 자료도 저장
+                    "evidence": out.get("evidence", []), "unverified_claims": out.get("unverified_claims", [])}
 
         with ThreadPoolExecutor(max_workers=concurrency) as pool:
             rows.extend(pool.map(work, jobs))
@@ -173,6 +175,7 @@ def run_langsmith(examples, variants, evaluators, concurrency: int, dataset_name
                 "variant": name, "rep": seen[ex_id], "id": ex_id, "question": ex.inputs["question"],
                 "scores": scores, "comments": comments, "error": run.error,
                 "report": (run.outputs or {}).get("report", ""), "sub_questions": (run.outputs or {}).get("sub_questions", []),
+                "evidence": (run.outputs or {}).get("evidence", []), "unverified_claims": (run.outputs or {}).get("unverified_claims", []),
             })
     return rows
 

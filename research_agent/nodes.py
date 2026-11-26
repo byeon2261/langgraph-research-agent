@@ -21,6 +21,7 @@ from research_agent.prompts import (
     REPORT_PROMPT,
     REVISE_PROMPT,
 )
+from research_agent.numbers import REASON_KO, check_sentence
 from research_agent.state import SearchState, State
 
 load_dotenv()
@@ -360,55 +361,47 @@ def write_report(state: State, config: RunnableConfig) -> dict:
 
 # ---------- verify_report: 보고서의 수치가 근거 자료에 있는지 검사 ----------
 _CITE = re.compile(r"\[(\d+)\]")
-_NUM = re.compile(r"\d[\d,]*(?:\.\d+)?")
 _SENT_SPLIT = re.compile(r"(?<=[.!?。])\s+")
 
 
-def _norm_num(x: str) -> str:
-    return x.replace(",", "")
-
-
-def _numbers_in(text: str) -> set[str]:
-    return {_norm_num(m) for m in _NUM.findall(text)}
-
-
-def _claim_numbers(sentence: str) -> set[str]:
-    """검사할 수치만 고른다. 출처 번호, 연도(1900~2100), 10 이하의 작은 정수는 제외"""
-    body = _CITE.sub("", sentence)
-    nums = set()
-    for raw in _NUM.findall(body):
-        n = _norm_num(raw)
-        if re.fullmatch(r"(19|20|21)\d\d", n):
-            continue
-        if n.isdigit() and int(n) <= 10:
-            continue
-        nums.add(n)
-    return nums
-
-
-def find_unsupported_numbers(report: str, evidence: list[dict]) -> list[dict]:
-    """근거 자료에서 찾을 수 없는 수치가 들어간 문장 목록.
-    - 출처 번호가 붙은 문장: 그 번호의 근거 자료에 수치가 있어야 함
-    - 출처 번호가 없는 문장(요약 등): 전체 근거 자료 중 어딘가에 있어야 함
-    evidence: [{"n": 번호, "content": 본문}, ...] (보고서 [번호]와 같은 순서)
-    """
-    by_n = {e["n"]: _numbers_in(e.get("content") or "") for e in evidence}
-    everything = set().union(*by_n.values()) if by_n else set()
-    flagged = []
+def _report_sentences(report: str):
     for line in (report or "").splitlines():
         t = line.strip()
         if not t or t.startswith("#") or set(t) <= set("|-: "):
             continue
         for sent in _SENT_SPLIT.split(t):
-            nums = _claim_numbers(sent)
-            if not nums:
-                continue
-            cited = [int(c) for c in _CITE.findall(sent)]
-            pool = set().union(*(by_n.get(c, set()) for c in cited)) if cited else everything
-            missing = sorted(nums - pool)
-            if missing:
-                flagged.append({"sentence": sent.strip(), "numbers": missing, "cited": cited})
-    return flagged
+            if sent.strip():
+                yield sent.strip()
+
+
+def check_report_numbers(report: str, evidence: list[dict]) -> tuple[int, list[dict]]:
+    """보고서의 수치 문장을 검사한다. 반환: (수치가 있는 문장 수, 문제 문장 목록)
+    - 출처 번호가 붙은 문장: 그 번호의 근거 자료와 비교 (다른 자료에만 있으면 잘못된 인용)
+    - 출처 번호가 없는 문장(요약 등): 전체 근거 자료와 비교
+    - 값(반올림 허용)·단위·맥락이 모두 맞아야 통과 (자세한 규칙은 research_agent/numbers.py)
+    evidence: [{"n": 번호, "content": 본문}, ...] (보고서 [번호]와 같은 순서)
+    """
+    by_n = {e["n"]: e.get("content") or "" for e in evidence}
+    total, flagged = 0, []
+    for sent in _report_sentences(report):
+        cited = [int(c) for c in _CITE.findall(sent)]
+        texts = [by_n[c] for c in cited if c in by_n] if cited else list(by_n.values())
+        n_claims, issues = check_sentence(_CITE.sub("", sent), texts)
+        if n_claims:
+            total += 1
+        if issues:
+            flagged.append({
+                "sentence": sent,
+                "numbers": [i.text for i in issues],
+                "reasons": [i.reason for i in issues],
+                "cited": cited,
+            })
+    return total, flagged
+
+
+def find_unsupported_numbers(report: str, evidence: list[dict]) -> list[dict]:
+    """근거 자료로 확인되지 않는 수치가 들어간 문장 목록"""
+    return check_report_numbers(report, evidence)[1]
 
 
 def verify_report(state: State, config: RunnableConfig) -> dict:
@@ -424,7 +417,12 @@ def verify_report(state: State, config: RunnableConfig) -> dict:
 
     revised = _model("report_model", s).invoke(
         REVISE_PROMPT.format(
-            flagged="\n".join(f"- {f['sentence']}  (확인 안 된 수치: {', '.join(f['numbers'])})" for f in flagged),
+            flagged="\n".join(
+                f"- {f['sentence']}  (확인 안 된 수치: "
+                + ", ".join(f"{t} → {REASON_KO[r]}" for t, r in zip(f["numbers"], f["reasons"]))
+                + ")"
+                for f in flagged
+            ),
             report=report,
             results=_format_results(selected),
         )

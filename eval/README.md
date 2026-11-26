@@ -10,7 +10,18 @@ uv run python -m eval.run_eval --repeat 3               # 3회 반복 → 평균
 uv run python -m eval.run_eval --variants improved mini_eval
 uv run python -m eval.run_eval --langsmith              # LangSmith에도 기록 (.env에 LANGSMITH_API_KEY)
 ```
-결과는 `eval/results/<시각>.md`(비교표)와 `.json`(원자료)으로 저장돼요.
+결과는 `eval/results/<시각>.md`(비교표)와 `.json`(원자료, 보고서와 근거 자료 포함)으로 저장돼요.
+
+저장된 결과를 새 심판으로 다시 채점하려면 (검색 없이 심판 비용만):
+```powershell
+uv run python -m eval.rejudge eval/results/<시각>.json            # 근거 일치율만
+uv run python -m eval.rejudge eval/results/<시각>.json --aspect   # 관점 커버율도
+```
+
+수치 검사에 걸린 문장을 직접 확인하려면:
+```powershell
+uv run python -m eval.check_numbers eval/results/<시각>.json --variant improved
+```
 
 ## 데이터셋 (`dataset.json`)
 질문마다 정답 대신 **"보고서가 꼭 다뤄야 할 관점"**(3~5개)을 적어 두었어요.
@@ -22,8 +33,8 @@ uv run python -m eval.run_eval --langsmith              # LangSmith에도 기록
 | 지표 | 방식 | 의미 |
 |---|---|---|
 | 관점 커버율 `aspect_coverage` | LLM 심판 | 데이터셋의 관점을 구체적으로 다룬 비율 |
-| 근거 일치율 `groundedness` | LLM 심판 | 구체적 주장(최대 12개)이 근거 자료와 맞는 정도. supported 1 / partial 0.5 / unsupported 0, 출처 없는 주장은 unsupported (환각 점검) |
-| 수치 근거율 `numeric_grounding` | 규칙 | 수치가 들어간 문장 중 그 수치가 근거 자료에 실제로 있는 비율 (비용 없는 환각 점검) |
+| 근거 일치율 `groundedness` | LLM 심판 (2단계) | ① 보고서만 보고 구체적 주장(최대 12개) 추출 → 코드로 보고서에 실제 있는 주장인지 확인 ② 주장마다 인용한 근거 자료만 붙여 판정. supported 1 / partial 0.5 / unsupported 0 (환각 점검) |
+| 수치 근거율 `numeric_grounding` | 규칙 | 수치가 들어간 문장 중 그 수치가 근거 자료에 같은 값·단위·맥락으로 있는 비율 (비용 없는 환각 점검, 규칙은 `research_agent/numbers.py`) |
 | 인용 번호 유효율 `citation_validity` | 규칙 | 보고서의 [번호]가 실제 출처 목록에 있는 비율 |
 | 인용 포함 문장 비율 `citation_coverage` | 규칙 | 주장이 담긴 줄 중 출처가 붙은 줄의 비율 |
 | 하위 질문 근거 확보율 `subq_coverage` | 에이전트 자체 판단 | 마지막 평가에서 ✓인 하위 질문 비율 |

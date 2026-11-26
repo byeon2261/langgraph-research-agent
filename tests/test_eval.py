@@ -35,31 +35,79 @@ def test_efficiency_returns_multiple_results():
 
 
 def test_numeric_grounding():
-    ev_ = [{"n": 1, "content": "매출 1,200억 원"}]
-    out = {"report": "# 제목\n매출은 1200억 원이다 [1]. 이익은 300억 원이다 [1].\n설명만 있는 문장이다.", "evidence": ev_}
+    ev_ = [{"n": 1, "content": "회사 매출 1,200억 원"}]
+    out = {"report": "# 제목\n회사 매출은 1200억 원이다 [1]. 회사 이익은 300억 원이다 [1].\n설명만 있는 문장이다.", "evidence": ev_}
     r = ev.numeric_grounding(out)
-    assert r["score"] == 0.5 and "1/2" in r["comment"]
+    assert r["score"] == 0.5 and "1/2" in r["comment"] and "300억 원" in r["comment"]
     assert ev.numeric_grounding({"report": "수치 없는 보고서", "evidence": []})["score"] == 1.0
 
 
-def test_llm_judges_with_stub():
+REPORT = "# 보고서\n국내 AI 스타트업 투자액은 2,450억 원이다 [1]. 트웰브랩스는 700억 원을 유치했다 [2].\n요약 문장입니다."
+EVID = [{"n": 1, "title": "t1", "content": "투자액 2,450억 원"}, {"n": 2, "title": "t2", "content": "트웰브랩스 700억 원 유치"}]
+
+
+def judge_stub(seen):
     def h(name, prompt):
+        seen.append((name, prompt))
         if name == "AspectJudgement":
             return ev.AspectJudgement(covered=[True, False], reason="두 번째 빠짐")
-        return ev.GroundednessJudgement(claims=[
-            ev.ClaimCheck(claim="a", cited=[1], verdict="supported"),
-            ev.ClaimCheck(claim="b", cited=[1], verdict="partial"),
-            ev.ClaimCheck(claim="c", cited=[], verdict="unsupported"),
-            ev.ClaimCheck(claim="d", cited=[2], verdict="Supported "),
-        ])
+        if name == "ClaimExtraction":
+            return ev.ClaimExtraction(claims=[
+                ev.ExtractedClaim(quote="국내 AI 스타트업 투자액은 2,450억 원이다 [1].", cited=[1]),
+                ev.ExtractedClaim(quote="1분기 반도체 수출액은 785억 달러다.", cited=[]),  # 보고서에 없음 (근거 자료 문장)
+                ev.ExtractedClaim(quote="트웰브랩스는 700억 원을 유치했다", cited=[2]),  # 마침표·번호 빠져도 같은 문장
+            ])
+        if name == "ClaimVerdicts":
+            return ev.ClaimVerdicts(verdicts=["Supported ", "partial"], reasons=["a", "b"])
+        raise AssertionError(name)
+    return StructuredStub(h)
 
-    aspect, grounded = ev.make_llm_judges(StructuredStub(h))
-    a = aspect({"question": "Q"}, {"report": "r"}, {"aspects": ["x", "y"]})
-    g = grounded({"report": "r", "evidence": [{"n": 1, "content": "c"}]})
-    assert a["score"] == 0.5
-    assert g["score"] == 0.625  # (1 + 0.5 + 0 + 1) / 4, 대소문자·공백 무시
-    assert "(partial) b" in g["comment"] and "(unsupported) c" in g["comment"]
+
+def test_llm_judges_with_stub():
+    seen = []
+    aspect, grounded = ev.make_llm_judges(judge_stub(seen))
+    assert aspect({"question": "Q"}, {"report": "r"}, {"aspects": ["x", "y"]})["score"] == 0.5
+    g = grounded({"report": REPORT, "evidence": EVID})
+    assert g["score"] == 0.75  # (1 + 0.5) / 2, 보고서에 없는 주장은 제외
+    assert "심판 오류로 제외 1건" in g["comment"] and "(partial) 트웰브랩스" in g["comment"]
+    extract_prompt = next(p for n_, p in seen if n_ == "ClaimExtraction")
+    verify_prompt = next(p for n_, p in seen if n_ == "ClaimVerdicts")
+    assert "투자액 2,450억 원" not in extract_prompt  # 1단계에는 근거 자료를 보여 주지 않음
+    assert "785억" not in verify_prompt  # 제외된 주장은 판정하지 않음
     assert grounded({"report": "", "evidence": []})["score"] == 0.0
+
+
+@pytest.mark.parametrize(
+    "quote,ok",
+    [
+        ("국내 AI 스타트업 투자액은 2,450억 원이다 [1].", True),
+        ("국내 AI 스타트업 투자액은 2450억 원이었다", True),  # 어미·쉼표 차이
+        ("국내 AI 스타트업 투자액은 3,000억 원이다", False),  # 문장은 비슷하지만 수치가 보고서에 없음
+        ("1분기 반도체 수출액은 785억 달러다.", False),
+        ("", False),
+    ],
+)
+def test_claim_in_report(quote, ok):
+    assert ev.claim_in_report(quote, REPORT) is ok
+
+
+def test_rejudge_tool(tmp_path):
+    from eval import rejudge
+
+    rows = [
+        {"variant": "v", "id": "ai-regulation", "rep": 1, "question": "Q", "error": None, "report": REPORT, "evidence": EVID,
+         "scores": {"groundedness": 0.4, "aspect_coverage": 1.0}, "comments": {}},
+        {"variant": "v", "id": "ai-regulation", "rep": 2, "question": "Q", "error": "boom", "scores": {}, "comments": {}},
+    ]
+    f = tmp_path / "x.json"
+    f.write_text(json.dumps({"meta": {"time": "t", "n_examples": 1, "judge": "gpt-4o", "mode": "로컬"}, "rows": rows}, ensure_ascii=False), encoding="utf-8")
+    out = rejudge.main([str(f)], judge=judge_stub([]))
+    data = json.loads(out.with_suffix(".json").read_text(encoding="utf-8"))
+    r = data["rows"][0]
+    assert r["scores"]["groundedness"] == 0.75 and r["scores"]["groundedness_old"] == 0.4
+    assert r["scores"]["aspect_coverage"] == 1.0  # --aspect 없으면 그대로
+    assert "재채점 전후" in out.read_text(encoding="utf-8")
+    assert data["summary_before"]["v"]["groundedness"] == 0.4
 
 
 def test_call_evaluator_matches_langsmith_arg_rules():
@@ -119,3 +167,22 @@ def test_summarize_sd():
     ]
     s = run_eval.summarize(rows, ["v"])["v"]
     assert s["aspect_coverage"] == 0.9 and s["aspect_coverage_sd"] == 0.141 and s["errors"] == 1
+
+
+def test_check_numbers_tool(tmp_path, capsys):
+    from eval import check_numbers
+
+    rows = [{"variant": "v", "id": "q", "rep": 1, "error": None,
+             "report": "회사 매출은 1200억 원이다 [1]. 회사 이익은 300억 원이다 [1].",
+             "evidence": [{"n": 1, "content": "회사 매출 1,200억 원"}]}]
+    f = tmp_path / "r.json"
+    f.write_text(json.dumps({"rows": rows}, ensure_ascii=False), encoding="utf-8")
+    check_numbers.main([str(f)])
+    out = capsys.readouterr().out
+    assert "300억 원: 근거 자료에 없는 값" in out and "2개 중 1개 걸림" in out
+
+
+def test_run_eval_saves_evidence(stubs, tmp_path):
+    md = run_eval.main(["--limit", "1", "--no-judge", "--variants", "improved", "--concurrency", "1", "--out", str(tmp_path)])
+    row = json.loads(md.with_suffix(".json").read_text(encoding="utf-8"))["rows"][0]
+    assert row["evidence"] and {"n", "content"} <= set(row["evidence"][0])
