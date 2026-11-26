@@ -31,6 +31,12 @@ export function describe(node, values, turn) {
     return lines.join("\n");
   }
   if (node === "write_report") return "완료";
+  if (node === "verify_report") {
+    const k = values.revised_sentences ?? 0;
+    const left = values.unverified_claims?.length ?? 0;
+    if (!k) return "모든 수치가 근거 자료와 일치";
+    return `근거에 없는 수치가 있는 문장 ${k}개 수정` + (left ? `\n! 여전히 확인 안 된 문장 ${left}개` : "");
+  }
   return "";
 }
 
@@ -38,6 +44,7 @@ export function applyUpdate(t, node, values) {
   let status = "done";
   if (node === "evaluate" && !values.is_sufficient) status = "retry";
   if (node === "search" && values.search_errors?.length) status = "error";
+  if (node === "verify_report" && values.revised_sentences) status = "retry";
   const next = { steps: [...t.steps, { node, status, detail: describe(node, values, t) }] };
   if ((node === "plan" || node === "review_plan") && values.sub_questions)
     next.subQuestions = values.sub_questions;
@@ -50,6 +57,8 @@ export function applyUpdate(t, node, values) {
     next.sources = values.sources ?? [];
     next.draft = "";
   }
+  // 수치 검사에서 고친 보고서가 오면 교체
+  if (node === "verify_report" && values.report) next.report = values.report;
   return next;
 }
 

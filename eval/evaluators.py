@@ -68,6 +68,27 @@ def source_diversity(outputs: dict, reference_outputs: dict | None = None, targe
     return {"key": "source_diversity", "score": round(min(len(domains) / target, 1.0), 3), "comment": f"{len(domains)}개 도메인"}
 
 
+def numeric_grounding(outputs: dict, reference_outputs: dict | None = None) -> dict:
+    """수치가 들어간 문장 중, 그 수치가 근거 자료(인용 번호의 자료)에 실제로 있는 문장 비율.
+    LLM 없이 코드로 계산하는 환각 지표. 수치 문장이 없으면 1점"""
+    from research_agent.nodes import _CITE, _SENT_SPLIT, _claim_numbers, find_unsupported_numbers
+
+    report, evidence = outputs.get("report", ""), outputs.get("evidence") or []
+    total = 0
+    for line in report.splitlines():
+        t = line.strip()
+        if t and not t.startswith("#") and not set(t) <= set("|-: "):
+            total += sum(1 for sent in _SENT_SPLIT.split(t) if _claim_numbers(sent))
+    if total == 0:
+        return {"key": "numeric_grounding", "score": 1.0, "comment": "수치 문장 없음"}
+    bad = find_unsupported_numbers(report, evidence)
+    return {
+        "key": "numeric_grounding",
+        "score": round(1 - len(bad) / total, 3),
+        "comment": f"{total - len(bad)}/{total}문장" + (f" · 예: {bad[0]['sentence'][:80]}" if bad else ""),
+    }
+
+
 def efficiency(outputs: dict, reference_outputs: dict | None = None) -> dict:
     """비용·속도 관련 값 (점수가 아니라 측정값). 여러 값은 {"results": [...]}로 반환"""
     return {
@@ -75,6 +96,7 @@ def efficiency(outputs: dict, reference_outputs: dict | None = None) -> dict:
             {"key": "num_searches", "score": outputs.get("num_searches", 0)},
             {"key": "num_rounds", "score": outputs.get("loop_count", 0)},
             {"key": "latency_sec", "score": round(outputs.get("latency_sec", 0.0), 1)},
+            {"key": "revised_sentences", "score": outputs.get("revised_sentences", 0)},
         ]
     }
 
@@ -174,15 +196,16 @@ def make_llm_judges(judge=None):
     return [aspect_coverage, groundedness]
 
 
-RULE_EVALUATORS = [citation_validity, citation_coverage, subq_coverage, source_diversity, efficiency]
+RULE_EVALUATORS = [numeric_grounding, citation_validity, citation_coverage, subq_coverage, source_diversity, efficiency]
 
 # 요약표에 보여 줄 순서 (위: 품질 점수 0~1, 아래: 측정값)
 QUALITY_KEYS = [
     "aspect_coverage",
     "groundedness",
+    "numeric_grounding",
     "citation_validity",
     "citation_coverage",
     "subq_coverage",
     "source_diversity",
 ]
-MEASURE_KEYS = ["num_searches", "num_rounds", "latency_sec"]
+MEASURE_KEYS = ["num_searches", "num_rounds", "latency_sec", "revised_sentences"]

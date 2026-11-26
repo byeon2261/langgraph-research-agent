@@ -164,7 +164,8 @@ export default function App() {
               <div className="report-col">
                 {active.turns.map((t, i) => {
                   const isLast = i === active.turns.length - 1;
-                  const busy = running && isLast && !t.report && !t.review;
+                  // 보고서가 나온 뒤에도 수치 검사(verify_report)가 끝날 때까지는 진행 중으로 표시
+                  const busy = running && isLast && !t.review;
                   const text = t.report || t.draft;
                   return (
                     <section className="turn" key={i}>
@@ -172,7 +173,7 @@ export default function App() {
                         {i > 0 && <span className="followup-tag">후속 질문</span>}
                         {t.question}
                       </h2>
-                      <ProgressPanel steps={t.steps} running={busy} done={!!t.report} />
+                      <ProgressPanel steps={t.steps} running={busy} done={!!t.report && !busy} />
                       {t.review && isLast && (
                         <PlanReview payload={t.review} disabled={running} onApprove={approve} />
                       )}

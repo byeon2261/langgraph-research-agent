@@ -8,6 +8,7 @@ from research_agent.nodes import (
     plan,
     review_plan,
     search,
+    verify_report,
     write_report,
 )
 from research_agent.state import State
@@ -36,6 +37,7 @@ def build_graph(checkpointer=None):
     builder.add_node("search", search)
     builder.add_node("evaluate", evaluate, retry_policy=_retry)
     builder.add_node("write_report", write_report, retry_policy=_retry)
+    builder.add_node("verify_report", verify_report, retry_policy=_retry)
 
     builder.add_edge(START, "plan")
     builder.add_edge("plan", "review_plan")
@@ -46,7 +48,8 @@ def build_graph(checkpointer=None):
     builder.add_conditional_edges(
         "evaluate", route_after_evaluate, ["generate_query", "write_report"]
     )
-    builder.add_edge("write_report", END)
+    builder.add_edge("write_report", "verify_report")
+    builder.add_edge("verify_report", END)
     return builder.compile(checkpointer=checkpointer)
 
 

@@ -60,7 +60,7 @@ def run(graph, config, payload) -> dict:
                     interrupted = values[0].value
                     continue
                 values = values or {}
-                print(f"▶ {node}")
+                print(("\n" if streaming else "") + f"▶ {node}")
                 if node == "review_plan":
                     for t in values.get("pending_queries", []):
                         print(f"   {t['sub_question']}  →  “{t['query']}”")
@@ -71,6 +71,11 @@ def run(graph, config, payload) -> dict:
                     r = values.get("results", [])
                     errs = values.get("search_errors", [])
                     print(f"   결과 {len(r)}건" + (f"  (오류: {errs[0]})" if errs else ""))
+                elif node == "verify_report":
+                    k = values.get("revised_sentences", 0)
+                    print("   " + (f"근거 자료에 없는 수치가 있는 문장 {k}개를 고쳤어요" if k else "모든 수치가 근거 자료와 일치해요"))
+                    final.update(values)
+                    continue
                 elif node == "evaluate":
                     subs = final.get("sub_questions", [])
                     for q, ok in zip(subs, values["covered"]):
@@ -81,6 +86,12 @@ def run(graph, config, payload) -> dict:
         if interrupted is None:
             break
         payload = Command(resume=ask_review(interrupted))  # [6] 승인/수정 값으로 재개
+
+    if final.get("revised_sentences"):
+        print("\n" + "=" * 60 + "\n[고친 보고서]\n")
+        print(final.get("report", ""))
+    for c in final.get("unverified_claims", []):
+        print(f"   ! 여전히 근거를 못 찾은 문장: {c}")
 
     print("\n\n출처")
     for s in final.get("sources", []):

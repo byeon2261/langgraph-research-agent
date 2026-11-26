@@ -30,6 +30,7 @@ RESULTS_DIR = ROOT / "results"
 LABELS = {
     "aspect_coverage": "관점 커버율 (LLM 심판)",
     "groundedness": "근거 일치율 (LLM 심판)",
+    "numeric_grounding": "수치 근거율",
     "citation_validity": "인용 번호 유효율",
     "citation_coverage": "인용 포함 문장 비율",
     "subq_coverage": "하위 질문 근거 확보율",
@@ -37,6 +38,7 @@ LABELS = {
     "num_searches": "검색 횟수",
     "num_rounds": "검색 라운드",
     "latency_sec": "소요 시간(초)",
+    "revised_sentences": "검사로 고친 문장 수",
 }
 
 
@@ -66,6 +68,8 @@ def make_target(variant_cfg: dict):
             "loop_count": state.get("loop_count", 0),
             "num_searches": len(state.get("queries", [])),
             "search_errors": state.get("search_errors", []),
+            "revised_sentences": state.get("revised_sentences", 0),
+            "unverified_claims": state.get("unverified_claims", []),
             "evidence": evidence,
             "latency_sec": time.perf_counter() - t0,
         }
@@ -222,7 +226,7 @@ def to_markdown(rows, variants, summary, meta) -> str:
         out += ["", f"실행 실패: {errs}"]
 
     out += ["", "## 문항별 점수" + (" (반복 평균)" if meta.get("repeat", 1) > 1 else ""), ""]
-    cols = ["aspect_coverage", "groundedness", "citation_validity", "subq_coverage", "num_searches", "latency_sec"]
+    cols = ["aspect_coverage", "groundedness", "numeric_grounding", "citation_validity", "num_searches", "latency_sec"]
     out += ["| 문항 | 설정 | " + " | ".join(LABELS[c].split(" (")[0] for c in cols) + " |", "|---|---|" + "---|" * len(cols)]
     for ex_id in dict.fromkeys(r["id"] for r in rows):
         for v in variants:

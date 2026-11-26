@@ -81,3 +81,14 @@ def test_report_tokens_stream(stubs):
         if meta.get("langgraph_node") == "write_report"
     ]
     assert "".join(tokens).startswith("요약") and len(tokens) > 1
+
+
+def test_verify_step_fixes_unsupported_number(stubs, monkeypatch):
+    """보고서에 근거 없는 수치가 있으면 verify_report가 고친 보고서로 바꾼다"""
+    from conftest import fake_report
+    monkeypatch.setattr(n, "report_llm", fake_report("총 투자액은 2,450억 원이다 [1].", "총 투자액은 검색 결과로 확인되지 않음 [1]."))
+    g = build_graph()
+    nodes = [k for upd in g.stream({"question": "Q", "loop_count": 0}, FAST, stream_mode="updates") for k in upd]
+    assert nodes[-2:] == ["write_report", "verify_report"]
+    out = build_graph().invoke({"question": "Q", "loop_count": 0}, FAST)
+    assert "2,450" not in out["report"] and out["revised_sentences"] == 1

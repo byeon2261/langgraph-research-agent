@@ -30,8 +30,16 @@ def test_subq_coverage_and_diversity():
 
 
 def test_efficiency_returns_multiple_results():
-    res = ev.efficiency({"num_searches": 5, "loop_count": 2, "latency_sec": 12.34})["results"]
-    assert {r["key"]: r["score"] for r in res} == {"num_searches": 5, "num_rounds": 2, "latency_sec": 12.3}
+    res = ev.efficiency({"num_searches": 5, "loop_count": 2, "latency_sec": 12.34, "revised_sentences": 1})["results"]
+    assert {r["key"]: r["score"] for r in res} == {"num_searches": 5, "num_rounds": 2, "latency_sec": 12.3, "revised_sentences": 1}
+
+
+def test_numeric_grounding():
+    ev_ = [{"n": 1, "content": "매출 1,200억 원"}]
+    out = {"report": "# 제목\n매출은 1200억 원이다 [1]. 이익은 300억 원이다 [1].\n설명만 있는 문장이다.", "evidence": ev_}
+    r = ev.numeric_grounding(out)
+    assert r["score"] == 0.5 and "1/2" in r["comment"]
+    assert ev.numeric_grounding({"report": "수치 없는 보고서", "evidence": []})["score"] == 1.0
 
 
 def test_llm_judges_with_stub():

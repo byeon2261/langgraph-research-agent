@@ -7,6 +7,8 @@ VARIANTS: dict[str, dict] = {
     "baseline": {"max_loops": 1, "eval_model": "gpt-4o-mini", "min_domains": 0, "min_results_per_subq": 0},
     # 현재 기본 설정 (.env 값)
     "improved": {},
+    # improved에서 보고서 수치 검사(verify_report)만 끔 → 검사 효과 측정용
+    "no_verify": {"verify_report": False},
     # 비용 절감안: 나머지는 그대로, 평가 모델만 mini
     "mini_eval": {"eval_model": "gpt-4o-mini"},
 }
@@ -14,7 +16,8 @@ VARIANTS: dict[str, dict] = {
 DESCRIPTIONS = {
     "no_plan": "질문 분해 없음, 한 번 검색 후 요약 (처음 버전에 가까움)",
     "baseline": "질문 분해 + 병렬 검색, 재검색·규칙 점검 없음 (평가 gpt-4o-mini)",
-    "improved": "현재 기본 설정 (질문 분해 + 재검색 최대 3회 + 규칙 점검 + 평가 gpt-4o)",
+    "improved": "현재 기본 설정 (질문 분해 + 재검색 최대 3회 + 규칙 점검 + 평가 gpt-4o + 수치 검사)",
+    "no_verify": "improved와 같지만 보고서 수치 검사(verify_report) 끔",
     "mini_eval": "improved와 같지만 평가 모델만 gpt-4o-mini",
 }
 

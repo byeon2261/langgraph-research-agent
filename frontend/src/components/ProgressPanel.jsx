@@ -7,6 +7,7 @@ const LABELS = {
   search: "웹 검색",
   evaluate: "충분성 평가",
   write_report: "보고서 작성",
+  verify_report: "수치 근거 확인",
 };
 
 function StepIcon({ status }) {

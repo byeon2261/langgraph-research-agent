@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass, field, fields
 from datetime import datetime
@@ -18,6 +19,7 @@ from research_agent.prompts import (
     FOLLOWUP_PROMPT,
     PLAN_PROMPT,
     REPORT_PROMPT,
+    REVISE_PROMPT,
 )
 from research_agent.state import SearchState, State
 
@@ -51,6 +53,8 @@ class Settings:
     search_retries: int = field(default_factory=lambda: _env_int("SEARCH_RETRIES", 2))
     # False면 질문을 쪼개지 않고 원래 질문 하나로 검색 (평가에서 질문 분해 효과 측정용)
     use_plan: bool = True
+    # True면 보고서 작성 후 수치가 근거 자료에 있는지 검사하고, 없는 문장만 고친다
+    verify_report: bool = True
 
 
 def get_settings(config: RunnableConfig | None = None) -> Settings:
@@ -97,6 +101,16 @@ def _domain(url: str) -> str:
 
 def _numbered(items: list[str]) -> str:
     return "\n".join(f"{i}. {q}" for i, q in enumerate(items, 1))
+
+
+def _numbered_with_status(state: State) -> str:
+    """보고서 프롬프트용: 하위 질문마다 평가 결과(근거 확보/부족)를 붙인다"""
+    subs, covered = state.get("sub_questions", []), state.get("covered") or []
+    lines = []
+    for i, q in enumerate(subs, 1):
+        ok = covered[i - 1] if i - 1 < len(covered) else True
+        lines.append(f"{i}. {q} {'[근거 확보]' if ok else '[근거 부족]'}")
+    return "\n".join(lines)
 
 
 def _select(state: State, s: Settings = DEFAULTS) -> list[dict]:
@@ -332,7 +346,7 @@ def write_report(state: State, config: RunnableConfig) -> dict:
         REPORT_PROMPT.format(
             today=_today(),
             question=state["question"],
-            sub_questions=_numbered(state.get("sub_questions", [])),
+            sub_questions=_numbered_with_status(state),
             missing_info=state.get("missing_info") or "(없음)",
             results=_format_results(selected),
         )
@@ -342,3 +356,85 @@ def write_report(state: State, config: RunnableConfig) -> dict:
         for i, r in enumerate(selected, 1)
     ]
     return {"report": report, "sources": sources}
+
+
+# ---------- verify_report: 보고서의 수치가 근거 자료에 있는지 검사 ----------
+_CITE = re.compile(r"\[(\d+)\]")
+_NUM = re.compile(r"\d[\d,]*(?:\.\d+)?")
+_SENT_SPLIT = re.compile(r"(?<=[.!?。])\s+")
+
+
+def _norm_num(x: str) -> str:
+    return x.replace(",", "")
+
+
+def _numbers_in(text: str) -> set[str]:
+    return {_norm_num(m) for m in _NUM.findall(text)}
+
+
+def _claim_numbers(sentence: str) -> set[str]:
+    """검사할 수치만 고른다. 출처 번호, 연도(1900~2100), 10 이하의 작은 정수는 제외"""
+    body = _CITE.sub("", sentence)
+    nums = set()
+    for raw in _NUM.findall(body):
+        n = _norm_num(raw)
+        if re.fullmatch(r"(19|20|21)\d\d", n):
+            continue
+        if n.isdigit() and int(n) <= 10:
+            continue
+        nums.add(n)
+    return nums
+
+
+def find_unsupported_numbers(report: str, evidence: list[dict]) -> list[dict]:
+    """근거 자료에서 찾을 수 없는 수치가 들어간 문장 목록.
+    - 출처 번호가 붙은 문장: 그 번호의 근거 자료에 수치가 있어야 함
+    - 출처 번호가 없는 문장(요약 등): 전체 근거 자료 중 어딘가에 있어야 함
+    evidence: [{"n": 번호, "content": 본문}, ...] (보고서 [번호]와 같은 순서)
+    """
+    by_n = {e["n"]: _numbers_in(e.get("content") or "") for e in evidence}
+    everything = set().union(*by_n.values()) if by_n else set()
+    flagged = []
+    for line in (report or "").splitlines():
+        t = line.strip()
+        if not t or t.startswith("#") or set(t) <= set("|-: "):
+            continue
+        for sent in _SENT_SPLIT.split(t):
+            nums = _claim_numbers(sent)
+            if not nums:
+                continue
+            cited = [int(c) for c in _CITE.findall(sent)]
+            pool = set().union(*(by_n.get(c, set()) for c in cited)) if cited else everything
+            missing = sorted(nums - pool)
+            if missing:
+                flagged.append({"sentence": sent.strip(), "numbers": missing, "cited": cited})
+    return flagged
+
+
+def verify_report(state: State, config: RunnableConfig) -> dict:
+    s = get_settings(config)
+    if not s.verify_report:
+        return {"unverified_claims": [], "revised_sentences": 0}
+    selected = _select(state, s)
+    evidence = [{"n": i, "content": r.get("content")} for i, r in enumerate(selected, 1)]
+    report = state.get("report", "")
+    flagged = find_unsupported_numbers(report, evidence)
+    if not flagged:
+        return {"unverified_claims": [], "revised_sentences": 0}
+
+    revised = _model("report_model", s).invoke(
+        REVISE_PROMPT.format(
+            flagged="\n".join(f"- {f['sentence']}  (확인 안 된 수치: {', '.join(f['numbers'])})" for f in flagged),
+            report=report,
+            results=_format_results(selected),
+        )
+    ).content.strip()
+    # 고친 결과가 비었거나 지나치게 짧아지면(구조가 깨짐) 원래 보고서를 유지
+    if len(revised) < len(report) * 0.5:
+        revised = report
+    remaining = find_unsupported_numbers(revised, evidence)
+    return {
+        "report": revised,
+        "unverified_claims": [f["sentence"] for f in remaining],
+        "revised_sentences": len(flagged),
+    }

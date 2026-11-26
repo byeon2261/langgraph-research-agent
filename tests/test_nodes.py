@@ -169,3 +169,68 @@ def test_route_after_evaluate(state, expected):
 def test_fan_out_one_send_per_task():
     sends = fan_out({"pending_queries": TASKS})
     assert [s.node for s in sends] == ["search", "search"] and sends[1].arg == TASKS[1]
+
+
+# ---------- verify_report: 근거 없는 수치 검사 ----------
+EV = [{"n": 1, "content": "투자액은 2,450억 원, 성장률 35%"}, {"n": 2, "content": "기업 78개"}]
+
+
+@pytest.mark.parametrize(
+    "report,flag_numbers",
+    [
+        ("투자액은 2450억 원이다 [1].", []),  # 쉼표 무시하고 일치
+        ("기업은 78개다 [1].", [["78"]]),  # 다른 번호의 자료에만 있음 → 잘못된 인용
+        ("기업은 78개다 [2].", []),
+        ("요약하면 성장률은 35%다.", []),  # 출처 번호 없는 요약 문장은 전체 근거에서 찾음
+        ("요약하면 성장률은 40%다.", [["40"]]),
+        ("## 1. 2026년 현황\n2026년 3개 분야를 본다 [1].", []),  # 제목, 연도, 작은 정수는 제외
+        ("가는 12%다 [1]. 나는 35%다 [1].", [["12"]]),  # 문장 단위로 검사
+    ],
+)
+def test_find_unsupported_numbers(report, flag_numbers):
+    assert [f["numbers"] for f in n.find_unsupported_numbers(report, EV)] == flag_numbers
+
+
+def _verify_state(report):
+    return {
+        "report": report,
+        "sub_questions": ["A"],
+        "current_turn": 1,
+        "results": [{"url": "u1", "sub_question": "A", "content": "투자액은 2,450억 원", "round": 1, "turn": 1}],
+    }
+
+
+def test_verify_report_no_flags_skips_llm(stubs, monkeypatch):
+    monkeypatch.setattr(n, "report_llm", __import__("conftest").fake_report("호출되면 안 됨"))
+    out = n.verify_report(_verify_state("투자액은 2,450억 원이다 [1]."), {})
+    assert out == {"unverified_claims": [], "revised_sentences": 0}  # 보고서를 바꾸지 않음
+
+
+def test_verify_report_revises_flagged(stubs, monkeypatch):
+    fixed = "투자액은 2,450억 원이다 [1]. 스타트업 수는 검색 결과로 확인되지 않음."
+    monkeypatch.setattr(n, "report_llm", __import__("conftest").fake_report(fixed))
+    out = n.verify_report(_verify_state("투자액은 2,450억 원이다 [1]. 스타트업은 78개다 [1]."), {})
+    assert out["report"] == fixed and out["revised_sentences"] == 1 and out["unverified_claims"] == []
+
+
+def test_verify_report_keeps_original_if_revision_broken(stubs, monkeypatch):
+    monkeypatch.setattr(n, "report_llm", __import__("conftest").fake_report("짧음"))
+    original = "투자액은 2,450억 원이다 [1]. 스타트업은 78개로 집계됐다 [1]."
+    out = n.verify_report(_verify_state(original), {})
+    assert out["report"] == original and out["unverified_claims"]  # 남은 문제는 기록
+
+
+def test_verify_report_can_be_disabled(stubs):
+    out = n.verify_report(_verify_state("스타트업은 78개다 [1]."), {"configurable": {"verify_report": False}})
+    assert out == {"unverified_claims": [], "revised_sentences": 0}
+
+
+def test_report_prompt_marks_weak_subquestions(stubs, monkeypatch):
+    seen = []
+    class Rec:
+        def invoke(self, prompt):
+            seen.append(prompt)
+            return type("R", (), {"content": "r"})()
+    monkeypatch.setattr(n, "report_llm", Rec())
+    n.write_report({"question": "Q", "sub_questions": ["A", "B"], "covered": [True, False], "results": []}, {})
+    assert "1. A [근거 확보]" in seen[0] and "2. B [근거 부족]" in seen[0]

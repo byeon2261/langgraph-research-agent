@@ -47,6 +47,21 @@ suite("applyUpdate", () => {
   });
 });
 
+suite("verify_report", () => {
+  it("고친 보고서로 교체하고 단계 상태를 표시한다", () => {
+    const t = { ...newTurn("Q"), report: "원래 [1]" };
+    const next = applyUpdate(t, "verify_report", { report: "고침 [1]", revised_sentences: 2, unverified_claims: ["x"] });
+    expect(next.report).toBe("고침 [1]");
+    expect(next.steps[0].status).toBe("retry");
+    expect(next.steps[0].detail).toBe("근거에 없는 수치가 있는 문장 2개 수정\n! 여전히 확인 안 된 문장 1개");
+  });
+  it("고칠 게 없으면 보고서를 그대로 둔다", () => {
+    const next = applyUpdate({ ...newTurn("Q"), report: "원래" }, "verify_report", { revised_sentences: 0, unverified_claims: [] });
+    expect(next.report).toBeUndefined();
+    expect(next.steps[0]).toMatchObject({ status: "done", detail: "모든 수치가 근거 자료와 일치" });
+  });
+});
+
 suite("describe", () => {
   it("평가 단계에 하위 질문별 ✓/✗와 규칙 메모를 보여 준다", () => {
     const text = describe("evaluate", { covered: [true, false], rule_notes: ["도메인 부족"], is_sufficient: false }, { subQuestions: ["A", "B"] });

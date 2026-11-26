@@ -28,6 +28,9 @@ class State(TypedDict, total=False):
     # 보고서와, 보고서의 [번호]와 똑같은 순서의 출처 목록
     report: str
     sources: list[dict]
+    # verify_report 결과: 고친 뒤에도 근거를 못 찾은 문장, 고친 문장 수
+    unverified_claims: list[str]
+    revised_sentences: int
 
 
 class SearchState(TypedDict, total=False):
